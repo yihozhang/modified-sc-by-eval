@@ -1,4 +1,5 @@
 #!/bin/bash
 
-cabal build || exit $?
-dist/build/supercompile/supercompile -v0 --no-assertions $*
+stack build || exit $?
+stack exec supercompile -- -v0 --no-assertions $*
+# dist-newstyle/build/supercompile/supercompile -v0 --no-assertions $*

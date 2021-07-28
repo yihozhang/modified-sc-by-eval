@@ -1,16 +1,17 @@
 {-# LANGUAGE PatternGuards, ViewPatterns, TypeSynonymInstances, FlexibleInstances #-}
+{-# LANGUAGE DeriveGeneric, DeriveAnyClass #-}
 module Core.Syntax where
 
 import Name
 import Utilities
-
+import GHC.Generics (Generic, Generic1)
 
 type Var = Name
 
 type DataCon = String
 
 data PrimOp = Add | Subtract | Multiply | Divide | Modulo | Equal | LessThan | LessThanEqual
-            deriving (Eq, Ord, Show)
+            deriving (Eq, Ord, Show, Generic, NFData)
 
 data AltCon = DataAlt DataCon [Var] | LiteralAlt Literal | DefaultAlt (Maybe Var)
             deriving (Eq, Show)
@@ -34,7 +35,7 @@ type TaggedValue = ValueF TaggedTerm
 data ValueF term = Lambda Var term | Data DataCon [Var] | Literal Literal
                  deriving (Eq, Show)
 
-instance NFData PrimOp
+-- instance NFData PrimOp
 
 instance NFData AltCon where
     rnf (DataAlt a b) = rnf a `seq` rnf b
@@ -133,7 +134,7 @@ instance Pretty term => Pretty (ValueF term) where
         Literal l     -> pPrintPrec level prec l
 
 pPrintPrecLam :: Pretty a => PrettyLevel -> Rational -> [Var] -> a -> Doc
-pPrintPrecLam level prec xs e = prettyParen (prec > noPrec) $ text "\\" <> hsep [pPrintPrec level appPrec y | y <- xs] <+> text "->" <+> pPrintPrec level noPrec e
+pPrintPrecLam level prec xs e = prettyParen (prec > noPrec) $ (text "\\" <> hsep [pPrintPrec level appPrec y | y <- xs]) <+> text "->" <+> pPrintPrec level noPrec e
 
 pPrintPrecApps :: (Pretty a, Pretty b) => PrettyLevel -> Rational -> a -> [b] -> Doc
 pPrintPrecApps level prec e1 es2 = prettyParen (not (null es2) && prec >= appPrec) $ pPrintPrec level opPrec e1 <+> hsep (map (pPrintPrec level appPrec) es2)

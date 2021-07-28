@@ -24,14 +24,14 @@ import Control.DeepSeq (NFData(..), rnf)
 import Control.Monad
 
 import Data.Maybe
-import Data.List
+import Data.List hiding (uncons)
 import qualified Data.Map as M
 import qualified Data.Set as S
 import Data.Time.Clock.POSIX (getPOSIXTime)
 
 import Debug.Trace
 
-import Text.PrettyPrint.HughesPJClass hiding (render, int, char)
+import Text.PrettyPrint.HughesPJClass hiding (first, (<>), render, int, char)
 import qualified Text.PrettyPrint.HughesPJClass as Pretty
 
 import System.IO
@@ -296,12 +296,12 @@ fixpoint f x
    | otherwise = fixpoint f x'
   where x' = f x
 
-zipWithEqualM :: Monad m => (a -> b -> m c) -> [a] -> [b] -> m [c]
+zipWithEqualM :: MonadFail m => (a -> b -> m c) -> [a] -> [b] -> m [c]
 zipWithEqualM _ []     []     = return []
 zipWithEqualM f (x:xs) (y:ys) = liftM2 (:) (f x y) (zipWithEqualM f xs ys)
 zipWithEqualM _ _ _ = fail "zipWithEqualM"
 
-zipWithEqualM_ :: Monad m => (a -> b -> m ()) -> [a] -> [b] -> m ()
+zipWithEqualM_ :: MonadFail m => (a -> b -> m ()) -> [a] -> [b] -> m ()
 zipWithEqualM_ _ []     []     = return ()
 zipWithEqualM_ f (x:xs) (y:ys) = f x y >> zipWithEqualM_ f xs ys
 zipWithEqualM_ _ _ _ = fail "zipWithEqualM_"

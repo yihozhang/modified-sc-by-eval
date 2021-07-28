@@ -30,7 +30,7 @@ parse path = do
     wrapper <- if has_wrapper then readFile wrapper_path >>= cpp else return ""
     
     -- Return parsed .core file
-    return (wrapper, moduleCore . LHE.fromParseResult . LHE.parseFileContentsWithMode (LHE.defaultParseMode { LHE.parseFilename = path, LHE.extensions = [LHE.CPP, LHE.MagicHash] }) $ contents)
+    return (wrapper, moduleCore . LHE.fromParseResult . LHE.parseFileContentsWithMode (LHE.defaultParseMode { LHE.parseFilename = path, LHE.extensions = [LHE.EnableExtension LHE.CPP, LHE.EnableExtension LHE.MagicHash] }) $ contents)
   where cpp = runCpphs (defaultCpphsOptions { boolopts = (boolopts defaultCpphsOptions) { locations = False }, defines = ("SUPERCOMPILE", "1") : defines defaultCpphsOptions }) path
 
 
@@ -98,6 +98,10 @@ instance Monad ParseM where
     return x = ParseM $ \s -> (s, x)
     mx >>= fxmy = ParseM $ \s -> case unParseM mx s of (s, x) -> unParseM (fxmy x) s
 
+instance Applicative ParseM where
+    pure x = ParseM $ \s -> (s, x)
+    (<*>) = ap
+
 freshName :: String -> ParseM Name
 freshName n = ParseM $ \s -> let (ids', x) = Name.freshName (ids s) n in (s { ids = ids' }, x)
 
@@ -138,91 +142,97 @@ runParseM :: ParseM a -> ([(Var, Term)], a)
 runParseM = first buildWrappers . flip unParseM initParseState
 
 
-moduleCore :: LHE.Module -> [(Var, Term)]
-moduleCore (LHE.Module _loc _name _ops _warntxt _mbexports _imports decls) = wrap_xes ++ xes
+moduleCore :: (Show l) => LHE.Module l -> [(Var, Term)]
+moduleCore (LHE.Module _loc _ops _mbexports _imports decls) = wrap_xes ++ xes
   where (wrap_xes, xes) = runParseM $ declsCore decls
 
 
-declsCore :: [LHE.Decl] -> ParseM [(Name, Term)]
+declsCore :: (Show l) => [LHE.Decl l] -> ParseM [(Name, Term)]
 declsCore = fmap concat . mapM declCore
 
-declCore :: LHE.Decl -> ParseM [(Name, Term)]
-declCore (LHE.FunBind [LHE.Match _loc n pats _mb_type@Nothing (LHE.UnGuardedRhs e) _binds@(LHE.BDecls where_decls)]) = do
+declCore :: (Show l) => LHE.Decl l -> ParseM [(Name, Term)]
+declCore (LHE.FunBind _loc [LHE.Match _loc' n pats (LHE.UnGuardedRhs _l e) (Just _binds@(LHE.BDecls _l' where_decls))]) = do
     let x = name (nameString n)
         (ys, _bound_ns, build) = patCores pats
     xes <- declsCore where_decls
     e <- expCore e
     return [(x, lambdas ys $ build $ bind xes e)]
-declCore (LHE.PatBind _loc pat _mb_ty@Nothing (LHE.UnGuardedRhs e) _binds@(LHE.BDecls where_decls)) = do
+declCore (LHE.FunBind _loc [LHE.Match _loc' n pats (LHE.UnGuardedRhs _l e) Nothing]) = 
+    declCore (LHE.FunBind _loc [LHE.Match _loc' n pats (LHE.UnGuardedRhs _l e) (Just (LHE.BDecls _l []))])
+declCore (LHE.PatBind _loc pat (LHE.UnGuardedRhs _l e) (Just _binds@(LHE.BDecls _l' where_decls))) = do
     let (x, bound_ns, build) = patCore pat
     xes <- declsCore where_decls
     e <- expCore e
     return $ (x, bind xes e) : [(n, build (var n)) | n <- bound_ns, n /= x]
+declCore (LHE.PatBind _loc pat (LHE.UnGuardedRhs _l e) Nothing) =
+    declCore (LHE.PatBind _loc pat (LHE.UnGuardedRhs _l e) (Just (LHE.BDecls _l [])))
 declCore d = panic "declCore" (text $ show d)
 
-expCore :: LHE.Exp -> ParseM Term
-expCore (LHE.Var qname) = qNameCore qname
-expCore (LHE.Con qname) = fmap var $ dataConWrapper $ qNameDataCon qname
-expCore (LHE.Lit lit) = literalCore lit
-expCore (LHE.NegApp e) = expCore $ LHE.App (LHE.Var (LHE.UnQual (LHE.Ident "negate"))) e
-expCore (LHE.App e1 e2) = expCore e2 >>= \e2 -> e2 `nameIt` \x2 -> fmap (`app` x2) $ expCore e1
-expCore (LHE.InfixApp e1 eop e2) = expCore e1 >>= \e1 -> e1 `nameIt` \x1 -> expCore e2 >>= \e2 -> e2 `nameIt` \x2 -> qopCore eop >>= \eop -> return $ apps eop [x1, x2]
-expCore (LHE.Let (LHE.BDecls binds) e) = do
+expCore :: (Show l) => LHE.Exp l -> ParseM Term
+expCore (LHE.Var _l qname) = qNameCore qname
+expCore (LHE.Con _l qname) = fmap var $ dataConWrapper $ qNameDataCon qname
+expCore (LHE.Lit _l lit) = literalCore lit
+expCore (LHE.NegApp _l e) = expCore $ LHE.App _l (LHE.Var _l (LHE.UnQual _l (LHE.Ident _l "negate"))) e
+expCore (LHE.App _l e1 e2) = expCore e2 >>= \e2 -> e2 `nameIt` \x2 -> fmap (`app` x2) $ expCore e1
+expCore (LHE.InfixApp _l e1 eop e2) = expCore e1 >>= \e1 -> e1 `nameIt` \x1 -> expCore e2 >>= \e2 -> e2 `nameIt` \x2 -> qopCore eop >>= \eop -> return $ apps eop [x1, x2]
+expCore (LHE.Let _l' (LHE.BDecls _l binds) e) = do
     xes <- declsCore binds
     fmap (bind xes) $ expCore e
-expCore (LHE.If e1 e2 e3) = expCore e1 >>= \e1 -> liftM2 (if_ e1) (expCore e2) (expCore e3)
-expCore (LHE.Case e alts) = expCore e >>= \e -> fmap (case_ e) (mapM altCore alts)
-expCore (LHE.Tuple es) = mapM expCore es >>= flip nameThem (return . tuple)
-expCore (LHE.Paren e) = expCore e
-expCore (LHE.List es) = mapM expCore es >>= list
+expCore (LHE.If _l e1 e2 e3) = expCore e1 >>= \e1 -> liftM2 (if_ e1) (expCore e2) (expCore e3)
+expCore (LHE.Case _l e alts) = expCore e >>= \e -> fmap (case_ e) (mapM altCore alts)
+expCore (LHE.Tuple _l _b es) = mapM expCore es >>= flip nameThem (return . tuple)
+expCore (LHE.Paren _l e) = expCore e
+expCore (LHE.List _l es) = mapM expCore es >>= list
 expCore (LHE.Lambda _ ps e) = expCore e >>= \e -> return $ lambdas xs $ build e
   where (xs, _bound_xs, build) = patCores ps
-expCore (LHE.LeftSection e1 eop) = expCore e1 >>= \e1 -> e1 `nameIt` \x1 -> qopCore eop >>= \eop -> return (eop `app` x1) -- NB: careful about sharing if you add Right sections!
-expCore (LHE.EnumFromThen e1 e2) = expCore $ LHE.Var (LHE.UnQual (LHE.Ident "enumFromThen")) `LHE.App` e1 `LHE.App` e2
+expCore (LHE.LeftSection _l e1 eop) = expCore e1 >>= \e1 -> e1 `nameIt` \x1 -> qopCore eop >>= \eop -> return (eop `app` x1) -- NB: careful about sharing if you add Right sections!
+expCore (LHE.EnumFromThen _l e1 e2) = expCore $ LHE.App _l (LHE.App _l (LHE.Var _l (LHE.UnQual _l (LHE.Ident _l "enumFromThen"))) e1) e2
 expCore e = panic "expCore" (text $ show e)
 
-qopCore :: LHE.QOp -> ParseM Term
-qopCore (LHE.QVarOp qn) = qNameCore qn
-qopCore (LHE.QConOp qn) = qNameCore qn
+qopCore :: (Show l) => LHE.QOp l -> ParseM Term
+qopCore (LHE.QVarOp _l qn) = qNameCore qn
+qopCore (LHE.QConOp _l qn) = qNameCore qn
 
-literalCore :: LHE.Literal -> ParseM Term
-literalCore (LHE.Int i) = fmap var $ intWrapper i
-literalCore (LHE.Char c) = fmap var $ charWrapper c
-literalCore (LHE.String s) = mapM (literalCore . LHE.Char) s >>= list
+literalCore :: (Show l) => LHE.Literal l -> ParseM Term
+literalCore (LHE.Int _l i s) = fmap var $ intWrapper i
+literalCore (LHE.Char _l c s) = fmap var $ charWrapper c
+literalCore (LHE.String _l s _s) = mapM (literalCore . (\c -> LHE.Char c c _s)) s >>= list
 
-altCore :: LHE.Alt -> ParseM Alt
-altCore (LHE.Alt _loc pat (LHE.UnGuardedAlt e) (LHE.BDecls binds)) = do
+altCore :: (Show l) => LHE.Alt l -> ParseM Alt
+altCore (LHE.Alt _loc pat (LHE.UnGuardedRhs _l e) (Just (LHE.BDecls _l' binds))) = do
     xes <- declsCore binds
     e <- expCore e
     return (altcon, build (bind xes e))
   where (altcon, build) = altPatCore pat
+altCore (LHE.Alt _loc pat (LHE.UnGuardedRhs _l e) Nothing) =
+    altCore (LHE.Alt _loc pat (LHE.UnGuardedRhs _l e) (Just (LHE.BDecls _l [])))
 
-altPatCore :: LHE.Pat -> (AltCon, Term -> Term)
-altPatCore (LHE.PApp qname pats)           = dataAlt (qNameDataCon qname) (patCores pats)
-altPatCore (LHE.PInfixApp pat1 qname pat2) = dataAlt (qNameDataCon qname) (patCores [pat1, pat2])
-altPatCore (LHE.PTuple [pat1, pat2])       = dataAlt pairDataCon (patCores [pat1, pat2])
-altPatCore (LHE.PParen pat)                = altPatCore pat
-altPatCore (LHE.PList [])                  = dataAlt nilDataCon ([], [], id)
-altPatCore (LHE.PLit (LHE.Int i))          = (LiteralAlt (Int i), id)
-altPatCore LHE.PWildCard                   = (DefaultAlt Nothing, id)
+altPatCore :: (Show l) => LHE.Pat l -> (AltCon, Term -> Term)
+altPatCore (LHE.PApp _l qname pats)           = dataAlt (qNameDataCon qname) (patCores pats)
+altPatCore (LHE.PInfixApp _l pat1 qname pat2) = dataAlt (qNameDataCon qname) (patCores [pat1, pat2])
+altPatCore (LHE.PTuple _l _b [pat1, pat2])       = dataAlt pairDataCon (patCores [pat1, pat2])
+altPatCore (LHE.PParen _l pat)                = altPatCore pat
+altPatCore (LHE.PList _l [])                  = dataAlt nilDataCon ([], [], id)
+altPatCore (LHE.PLit _l _sign (LHE.Int _l' i _s))          = (LiteralAlt (Int i), id)
+altPatCore (LHE.PWildCard _l)                   = (DefaultAlt Nothing, id)
 altPatCore p = panic "altPatCore" (text $ show p)
 
 dataAlt :: DataCon -> ([Var], [Var], Term -> Term) -> (AltCon, Term -> Term)
 dataAlt dcon (names, _bound_ns, build) = (DataAlt dcon names, build)
 
 
-specialConDataCon :: LHE.SpecialCon -> DataCon
-specialConDataCon LHE.UnitCon = unitDataCon
-specialConDataCon LHE.ListCon = nilDataCon
-specialConDataCon (LHE.TupleCon LHE.Boxed 2) = pairDataCon
-specialConDataCon LHE.Cons = consDataCon
+specialConDataCon :: LHE.SpecialCon l -> DataCon
+specialConDataCon (LHE.UnitCon _l) = unitDataCon
+specialConDataCon (LHE.ListCon _l) = nilDataCon
+specialConDataCon (LHE.TupleCon _l LHE.Boxed 2) = pairDataCon
+specialConDataCon (LHE.Cons _l) = consDataCon
 
-nameString :: LHE.Name -> String
-nameString (LHE.Ident s)  = s
-nameString (LHE.Symbol s) = s
+nameString :: LHE.Name l -> String
+nameString (LHE.Ident _l s)  = s
+nameString (LHE.Symbol _l s) = s
 
-qNameCore :: LHE.QName -> ParseM Term
-qNameCore (LHE.UnQual n) = fmap var $ case nameString n of
+qNameCore :: (Show l) => LHE.QName l -> ParseM Term
+qNameCore (LHE.UnQual _l n) = fmap var $ case nameString n of
     "+"   -> primWrapper Add
     "-"   -> primWrapper Subtract
     "*"   -> primWrapper Multiply
@@ -232,39 +242,40 @@ qNameCore (LHE.UnQual n) = fmap var $ case nameString n of
     "<"   -> primWrapper LessThan
     "<="  -> primWrapper LessThanEqual
     s -> return (name s)
-qNameCore (LHE.Special sc) = fmap var $ dataConWrapper $ specialConDataCon sc
+qNameCore (LHE.Special _l sc) = fmap var $ dataConWrapper $ specialConDataCon sc
 qNameCore qn = panic "qNameCore" (text $ show qn)
 
-qNameDataCon :: LHE.QName -> DataCon
-qNameDataCon (LHE.UnQual name) = nameString name
-qNameDataCon (LHE.Special sc)  = specialConDataCon sc
+qNameDataCon :: LHE.QName l -> DataCon
+qNameDataCon (LHE.UnQual _l name) = nameString name
+qNameDataCon (LHE.Special _l sc)  = specialConDataCon sc
 
-patCores :: [LHE.Pat] -> ([Var], [Var], Term -> Term)
+patCores :: (Show l) => [LHE.Pat l] -> ([Var], [Var], Term -> Term)
 patCores []     = ([], [], id)
 patCores (p:ps) = (n':ns', bound_ns' ++ bound_nss', build . build')
   where (n', bound_ns', build) = patCore p
         (ns', bound_nss', build') = patCores ps
 
 -- TODO: this function is a hilarious shadowing bug waiting to happen. Thread the IdSupply in here to generate temp names.
-patCore :: LHE.Pat        -- Pattern
+patCore :: (Show l) =>
+        LHE.Pat l        -- Pattern
         -> (Var,          -- Name consumed by the pattern
             [Var],        -- Names bound by the pattern
             Term -> Term) -- How to build the (strict) consuming context around the thing inside the pattern
-patCore (LHE.PVar n)    = (x, [x], id)
+patCore (LHE.PVar _l n)    = (x, [x], id)
   where x = name (nameString n)
-patCore LHE.PWildCard   = (x, [x], id)
+patCore (LHE.PWildCard _l)   = (x, [x], id)
   where x = name "_"
-patCore (LHE.PParen p)  = patCore p
-patCore (LHE.PTuple ps) = case tupleDataCon (length ps) of
+patCore (LHE.PParen _l p)  = patCore p
+patCore (LHE.PTuple _l _b ps) = case tupleDataCon (length ps) of
     Nothing | [p] <- ps -> patCore p
     Just dc -> (n', bound_ns', \e -> case_ (var n') [(DataAlt dc ns', build e)])
       where n' = name "tup"
             (ns', bound_ns', build) = patCores ps
-patCore (LHE.PInfixApp p1 qinfix p2) = (n', bound_ns1 ++ bound_ns2, \e -> case_ (var n') [(DataAlt (qNameDataCon qinfix) [n1', n2'], build1 (build2 e))])
+patCore (LHE.PInfixApp _l p1 qinfix p2) = (n', bound_ns1 ++ bound_ns2, \e -> case_ (var n') [(DataAlt (qNameDataCon qinfix) [n1', n2'], build1 (build2 e))])
   where n' = name "infx"
         (n1', bound_ns1, build1) = patCore p1
         (n2', bound_ns2, build2) = patCore p2
-patCore (LHE.PApp (LHE.Special LHE.UnitCon) []) = (name "unit", [], id)
+patCore (LHE.PApp _l (LHE.Special _l' (LHE.UnitCon _l'')) []) = (name "unit", [], id)
 patCore p = panic "patCore" (text $ show p)
 
 bind :: [(Var, Term)] -> Term -> Term

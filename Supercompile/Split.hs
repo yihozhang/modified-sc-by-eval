@@ -191,7 +191,7 @@ transitiveInline :: PureHeap -> PureHeap -> FreeVars -> PureHeap
 transitiveInline h_inlineable h_output fvs
     = if M.null h_inline then h_output else transitiveInline h_inlineable' (h_inline `M.union` h_output) fvs'
   where (h_inline, h_inlineable') = M.partitionWithKey (\x' _ -> x' `S.member` fvs) h_inlineable
-        fvs' = M.fold (\in_e fvs -> fvs `S.union` inFreeVars taggedTermFreeVars in_e) S.empty h_inline
+        fvs' = M.foldr (\in_e fvs -> fvs `S.union` inFreeVars taggedTermFreeVars in_e) S.empty h_inline
 
 transitiveInline' :: PureHeap -> State -> State
 transitiveInline' h_inlineable (Heap h ids, k, in_e) = (Heap (transitiveInline (h_inlineable `M.union` h) M.empty (stateFreeVars (Heap M.empty ids, k, in_e))) ids, k, in_e)
@@ -296,7 +296,7 @@ splitPureHeap h was_entered_many entered_k = -- traceRender ("splitPureHeap", (r
     -- We have already gathered entry information from the Stack. Carry on, gathering
     -- it from the Heap as well. Assume Heap bindings are used as many times as they were used
     -- the last time we went around the loop.
-    entered' = M.foldWithKey (\x' in_e entered' -> entered' `plusEnteredEnv` incorporate (fromJust $ name_id x') (M.lookup x' was_entered_many) in_e) entered_k h
+    entered' = M.foldrWithKey (\x' in_e entered' -> entered' `plusEnteredEnv` incorporate (fromJust $ name_id x') (M.lookup x' was_entered_many) in_e) entered_k h
     incorporate _ Nothing         _    = emptyEnteredEnv
     incorporate i (Just was_many) in_e = -- (\res -> traceRender ("incorporate", mb_id, ent, inFreeVars taggedTermFreeVars in_e) res) $
                                          mkEnteredEnv (if taggedTermIsCheap (snd in_e) && was_many then Many else Once (Just i)) (inFreeVars taggedTermFreeVars in_e)

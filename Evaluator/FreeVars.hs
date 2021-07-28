@@ -29,7 +29,7 @@ pureHeapFreeVars h (bvs, fvs) = fvs' S.\\ bvs'
   where (bvs', fvs') = pureHeapOpenFreeVars h (bvs, fvs)
 
 pureHeapOpenFreeVars :: PureHeap -> (BoundVars, FreeVars) -> (BoundVars, FreeVars)
-pureHeapOpenFreeVars = flip $ M.foldWithKey (\x' in_e (bvs, fvs) -> (S.insert x' bvs, fvs `S.union` inFreeVars taggedTermFreeVars in_e))
+pureHeapOpenFreeVars = flip $ M.foldrWithKey (\x' in_e (bvs, fvs) -> (S.insert x' bvs, fvs `S.union` inFreeVars taggedTermFreeVars in_e))
 
 stackFreeVars :: Stack -> FreeVars -> (BoundVars, FreeVars)
 stackFreeVars k fvs = (S.unions *** (S.union fvs . S.unions)) . unzip . map (stackFrameFreeVars . tagee) $ k

@@ -22,7 +22,7 @@ plusTagBags :: [TagBag] -> TagBag
 plusTagBags = TagBag . IM.unionsWith (+) . map unTagBag
 
 cardinality :: TagBag -> Int
-cardinality = IM.fold (+) 0 . unTagBag
+cardinality = IM.foldr (+) 0 . unTagBag
 
 setEqual :: TagBag -> TagBag -> Bool
 setEqual tb1 tb2  = IM.keysSet (unTagBag tb1) == IM.keysSet (unTagBag tb2)

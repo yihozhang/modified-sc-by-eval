@@ -117,6 +117,10 @@ instance Monad ScpM where
     return x = ScpM $ \s -> (s, x)
     (!mx) >>= fxmy = ScpM $ \s -> case unScpM mx s of (s, x) -> unScpM (fxmy x) s
 
+instance Applicative ScpM where
+    pure x = return x
+    (<*>) = ap
+
 runScpM :: FreeVars -> ScpM (Out Term) -> Out Term
 runScpM input_fvs (ScpM f) = letRec (sortBy (comparing ((read :: String -> Int) . drop 1 . name_string . fst)) $ outs s) e'
   where (s, e') = f init_s
